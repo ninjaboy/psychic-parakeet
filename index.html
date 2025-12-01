@@ -247,6 +247,34 @@
             });
         }
 
+        // Compress image to fit within size limit
+        async function compressImage(dataUrl, maxSize = 500000, maxDim = 800) {
+            const img = await loadImage(dataUrl);
+            const canvas = document.createElement('canvas');
+            let w = img.width, h = img.height;
+
+            // Scale down if too large
+            if (w > maxDim || h > maxDim) {
+                const ratio = Math.min(maxDim / w, maxDim / h);
+                w = Math.round(w * ratio);
+                h = Math.round(h * ratio);
+            }
+
+            canvas.width = w;
+            canvas.height = h;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0, w, h);
+
+            // Try different quality levels
+            let quality = 0.8;
+            let result = canvas.toDataURL('image/jpeg', quality);
+            while (result.length > maxSize && quality > 0.1) {
+                quality -= 0.1;
+                result = canvas.toDataURL('image/jpeg', quality);
+            }
+            return result;
+        }
+
         function showDetectionStatus(elementId, faces, type) {
             const el = document.getElementById(elementId);
             if (faces.length > 0) {
@@ -266,8 +294,11 @@
 
             document.getElementById('faceFileName').textContent = file.name;
             document.getElementById('faceFileLabel').classList.add('has-file');
+            document.getElementById('faceDetectionStatus').innerHTML = '<div class="detection-status detecting"><span class="spinner"></span>Loading & compressing...</div>';
 
-            faceImageData = await fileToBase64(file);
+            const rawData = await fileToBase64(file);
+            // Compress face image to reduce payload size
+            faceImageData = await compressImage(rawData, 300000, 600);
             document.getElementById('facePreview').innerHTML = `<img src="${faceImageData}" alt="Face" id="faceImg">`;
 
             // Detect face
@@ -347,7 +378,11 @@
                 };
 
                 const payloadStr = JSON.stringify(payload);
-                log('Payload size: ' + payloadStr.length + ' bytes');
+                log('Payload size: ' + (payloadStr.length / 1024 / 1024).toFixed(2) + ' MB');
+
+                if (payloadStr.length > 4400000) {
+                    throw new Error('Payload too large (' + (payloadStr.length / 1024 / 1024).toFixed(1) + 'MB). Use smaller GIF (<3MB)');
+                }
 
                 log('Fetching /api/replace-faces...');
                 let response;

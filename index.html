@@ -314,26 +314,52 @@
                 // Use detected faces or fallback to center
                 let facesToUse = detectedGifFaces;
                 if (facesToUse.length === 0) {
-                    // Fallback: place face in center
                     facesToUse = [{ x: 50, y: 50, width: 100, height: 100 }];
                 }
+
+                console.log('DEBUG: Starting request...');
+                console.log('DEBUG: Face data length:', faceImageData?.length);
+                console.log('DEBUG: GIF data length:', gifImageData?.length);
+                console.log('DEBUG: Faces to use:', JSON.stringify(facesToUse));
+
+                statusText.innerHTML = '<span class="spinner"></span> Sending to API...';
+
+                const payload = {
+                    faceImage: faceImageData,
+                    gifData: gifImageData,
+                    faces: facesToUse,
+                    blendStrength: document.getElementById('blendStrength').value / 100
+                };
+
+                console.log('DEBUG: Payload size:', JSON.stringify(payload).length);
 
                 const response = await fetch('/api/replace-faces', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        faceImage: faceImageData,
-                        gifData: gifImageData,
-                        faces: facesToUse,
-                        blendStrength: document.getElementById('blendStrength').value / 100
-                    })
+                    body: JSON.stringify(payload)
                 });
 
-                const result = await response.json();
+                console.log('DEBUG: Response status:', response.status);
+                console.log('DEBUG: Response headers:', [...response.headers.entries()]);
+
+                statusText.innerHTML = '<span class="spinner"></span> Parsing response...';
+
+                const responseText = await response.text();
+                console.log('DEBUG: Response text length:', responseText.length);
+                console.log('DEBUG: Response preview:', responseText.substring(0, 500));
+
+                let result;
+                try {
+                    result = JSON.parse(responseText);
+                } catch (parseErr) {
+                    throw new Error('Failed to parse response: ' + parseErr.message + ' | Response: ' + responseText.substring(0, 200));
+                }
 
                 if (!response.ok) {
                     throw new Error(result.error || 'Processing failed');
                 }
+
+                console.log('DEBUG: Success! GIF length:', result.gif?.length);
 
                 document.getElementById('resultImage').src = result.gif;
                 document.getElementById('downloadBtn').href = result.gif;
@@ -341,7 +367,8 @@
                 resultCard.classList.remove('hidden');
 
             } catch (error) {
-                statusText.innerHTML = `Error: ${error.message}`;
+                console.error('DEBUG: Full error:', error);
+                statusText.innerHTML = `Error: ${error.message}<br><small>Check browser console (F12) for details</small>`;
                 statusText.classList.add('error');
             } finally {
                 submitBtn.disabled = false;

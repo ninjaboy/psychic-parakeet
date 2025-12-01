@@ -4,8 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Face GIF Replacer</title>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/face-detection@1.0.2"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
@@ -24,7 +23,10 @@
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
         }
-        .subtitle { text-align: center; color: #888; margin-bottom: 30px; }
+        .subtitle { text-align: center; color: #888; margin-bottom: 10px; }
+        .model-status { text-align: center; font-size: 0.85rem; color: #666; margin-bottom: 20px; }
+        .model-status.ready { color: #00ff88; }
+        .model-status.error { color: #ff4444; }
         .card {
             background: rgba(255,255,255,0.05);
             border-radius: 16px;
@@ -48,6 +50,13 @@
         }
         .file-label:hover { background: linear-gradient(90deg, #00d9ff55, #ff00d955); border-color: #00d9ff; }
         .file-label.has-file { background: linear-gradient(90deg, #00ff8833, #00d9ff33); border-color: #00ff88; }
+        .detection-status {
+            margin-top: 10px; padding: 8px 12px; border-radius: 6px; font-size: 0.9rem;
+            display: inline-block;
+        }
+        .detection-status.success { background: rgba(0,255,136,0.2); color: #00ff88; }
+        .detection-status.warning { background: rgba(255,170,0,0.2); color: #ffaa00; }
+        .detection-status.detecting { background: rgba(0,217,255,0.2); color: #00d9ff; }
         .preview-container { display: flex; gap: 20px; margin-top: 20px; flex-wrap: wrap; }
         .preview-box {
             flex: 1; min-width: 200px;
@@ -60,7 +69,7 @@
             height: 150px; display: flex; align-items: center; justify-content: center;
             color: #555; border: 2px dashed #333; border-radius: 8px;
         }
-        .options { display: flex; gap: 20px; flex-wrap: wrap; }
+        .options { display: flex; gap: 20px; flex-wrap: wrap; align-items: center; }
         .option { display: flex; align-items: center; gap: 8px; }
         .option input[type="range"] { width: 120px; accent-color: #00d9ff; }
         .option label { color: #aaa; font-size: 0.9rem; }
@@ -89,14 +98,12 @@
         }
         @keyframes spin { to { transform: rotate(360deg); } }
         .hidden { display: none; }
-        .model-status { font-size: 0.8rem; color: #666; margin-top: 5px; }
-        .model-status.loaded { color: #00ff88; }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>Face GIF Replacer</h1>
-        <p class="subtitle">Replace faces in GIFs with your own face using ML</p>
+        <p class="subtitle">Auto-detect and replace faces in GIFs</p>
         <p class="model-status" id="modelStatus">Loading face detection model...</p>
 
         <form id="uploadForm">
@@ -106,7 +113,7 @@
                     <span id="faceFileName">Choose face image</span>
                     <input type="file" id="faceFile" accept="image/*">
                 </label>
-                <p id="faceDetectionStatus" style="margin-top:10px;color:#888;font-size:0.9rem;"></p>
+                <div id="faceDetectionStatus"></div>
             </div>
 
             <div class="card">
@@ -115,6 +122,7 @@
                     <span id="gifFileName">Choose GIF</span>
                     <input type="file" id="gifFile" accept="image/gif">
                 </label>
+                <div id="gifDetectionStatus"></div>
             </div>
 
             <div class="preview-container">
@@ -141,7 +149,7 @@
 
             <div class="card">
                 <button type="submit" class="submit-btn" id="submitBtn" disabled>
-                    Loading ML Model...
+                    Loading Model...
                 </button>
             </div>
         </form>
@@ -161,42 +169,52 @@
     </div>
 
     <script>
-        let detector = null;
-        let sourceFaceBox = null;
+        let modelsLoaded = false;
         let faceImageData = null;
         let gifImageData = null;
+        let detectedSourceFace = null;
+        let detectedGifFaces = [];
 
-        // Initialize face detector
-        async function initDetector() {
+        // Load face-api.js models
+        async function loadModels() {
+            const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.12/model/';
             try {
-                const model = faceDetection.SupportedModels.MediaPipeFaceDetector;
-                detector = await faceDetection.createDetector(model, {
-                    runtime: 'tfjs',
-                    maxFaces: 10
-                });
+                await Promise.all([
+                    faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
+                    faceapi.nets.faceLandmark68TinyNet.loadFromUri(MODEL_URL)
+                ]);
+                modelsLoaded = true;
                 document.getElementById('modelStatus').textContent = 'Face detection ready';
-                document.getElementById('modelStatus').classList.add('loaded');
+                document.getElementById('modelStatus').classList.add('ready');
                 document.getElementById('submitBtn').disabled = false;
                 document.getElementById('submitBtn').textContent = 'Replace Faces';
             } catch (e) {
                 document.getElementById('modelStatus').textContent = 'Model load failed: ' + e.message;
+                document.getElementById('modelStatus').classList.add('error');
+                // Still allow manual use
+                document.getElementById('submitBtn').disabled = false;
+                document.getElementById('submitBtn').textContent = 'Replace Faces (No Detection)';
             }
         }
-        initDetector();
 
-        // Detect faces in image
+        // Detect faces in image element
         async function detectFaces(imgElement) {
-            if (!detector) return [];
-            const faces = await detector.estimateFaces(imgElement);
-            return faces.map(f => ({
-                x: Math.round(f.box.xMin),
-                y: Math.round(f.box.yMin),
-                width: Math.round(f.box.width),
-                height: Math.round(f.box.height)
-            }));
+            if (!modelsLoaded) return [];
+            try {
+                const detections = await faceapi.detectAllFaces(imgElement, new faceapi.TinyFaceDetectorOptions());
+                return detections.map(d => ({
+                    x: Math.round(d.box.x),
+                    y: Math.round(d.box.y),
+                    width: Math.round(d.box.width),
+                    height: Math.round(d.box.height),
+                    score: d.score
+                }));
+            } catch (e) {
+                console.error('Detection error:', e);
+                return [];
+            }
         }
 
-        // File to base64
         function fileToBase64(file) {
             return new Promise((resolve, reject) => {
                 const reader = new FileReader();
@@ -206,14 +224,26 @@
             });
         }
 
-        // Load image element
         function loadImage(src) {
             return new Promise((resolve, reject) => {
                 const img = new Image();
+                img.crossOrigin = 'anonymous';
                 img.onload = () => resolve(img);
                 img.onerror = reject;
                 img.src = src;
             });
+        }
+
+        function showDetectionStatus(elementId, faces, type) {
+            const el = document.getElementById(elementId);
+            if (faces.length > 0) {
+                const faceInfo = faces.map((f, i) =>
+                    `Face ${i+1}: ${f.width}x${f.height} (${Math.round(f.score * 100)}% confidence)`
+                ).join('<br>');
+                el.innerHTML = `<div class="detection-status success">✓ ${faces.length} face(s) detected<br><small>${faceInfo}</small></div>`;
+            } else {
+                el.innerHTML = `<div class="detection-status warning">⚠ No face detected in ${type}</div>`;
+            }
         }
 
         // Face file handler
@@ -225,22 +255,16 @@
             document.getElementById('faceFileLabel').classList.add('has-file');
 
             faceImageData = await fileToBase64(file);
-            document.getElementById('facePreview').innerHTML = `<img src="${faceImageData}" alt="Face">`;
+            document.getElementById('facePreview').innerHTML = `<img src="${faceImageData}" alt="Face" id="faceImg">`;
 
             // Detect face
-            document.getElementById('faceDetectionStatus').textContent = 'Detecting face...';
+            document.getElementById('faceDetectionStatus').innerHTML = '<div class="detection-status detecting"><span class="spinner"></span>Detecting face...</div>';
+
             const img = await loadImage(faceImageData);
             const faces = await detectFaces(img);
+            detectedSourceFace = faces[0] || null;
 
-            if (faces.length > 0) {
-                sourceFaceBox = faces[0];
-                document.getElementById('faceDetectionStatus').textContent = `Face detected! (${faces.length} found)`;
-                document.getElementById('faceDetectionStatus').style.color = '#00ff88';
-            } else {
-                sourceFaceBox = { x: 0, y: 0, width: img.width, height: img.height };
-                document.getElementById('faceDetectionStatus').textContent = 'No face detected, using full image';
-                document.getElementById('faceDetectionStatus').style.color = '#ffaa00';
-            }
+            showDetectionStatus('faceDetectionStatus', faces, 'source image');
         });
 
         // GIF file handler
@@ -252,15 +276,21 @@
             document.getElementById('gifFileLabel').classList.add('has-file');
 
             gifImageData = await fileToBase64(file);
-            document.getElementById('gifPreview').innerHTML = `<img src="${gifImageData}" alt="GIF">`;
+            document.getElementById('gifPreview').innerHTML = `<img src="${gifImageData}" alt="GIF" id="gifImg">`;
+
+            // Detect faces in first frame
+            document.getElementById('gifDetectionStatus').innerHTML = '<div class="detection-status detecting"><span class="spinner"></span>Detecting faces in GIF...</div>';
+
+            const img = await loadImage(gifImageData);
+            detectedGifFaces = await detectFaces(img);
+
+            showDetectionStatus('gifDetectionStatus', detectedGifFaces, 'GIF');
         });
 
-        // Blend slider
         document.getElementById('blendStrength').addEventListener('input', (e) => {
             document.getElementById('blendValue').textContent = e.target.value + '%';
         });
 
-        // Form submit
         document.getElementById('uploadForm').addEventListener('submit', async (e) => {
             e.preventDefault();
 
@@ -277,14 +307,16 @@
             statusCard.classList.remove('hidden');
             resultCard.classList.add('hidden');
             submitBtn.disabled = true;
+            statusText.innerHTML = '<span class="spinner"></span> Processing GIF...';
+            statusText.classList.remove('error');
 
             try {
-                // Detect faces in first frame of GIF
-                statusText.innerHTML = '<span class="spinner"></span> Detecting faces in GIF...';
-                const gifImg = await loadImage(gifImageData);
-                const gifFaces = await detectFaces(gifImg);
-
-                statusText.innerHTML = '<span class="spinner"></span> Processing GIF (this may take a while)...';
+                // Use detected faces or fallback to center
+                let facesToUse = detectedGifFaces;
+                if (facesToUse.length === 0) {
+                    // Fallback: place face in center
+                    facesToUse = [{ x: 50, y: 50, width: 100, height: 100 }];
+                }
 
                 const response = await fetch('/api/replace-faces', {
                     method: 'POST',
@@ -292,7 +324,7 @@
                     body: JSON.stringify({
                         faceImage: faceImageData,
                         gifData: gifImageData,
-                        faces: gifFaces.length > 0 ? gifFaces : [sourceFaceBox],
+                        faces: facesToUse,
                         blendStrength: document.getElementById('blendStrength').value / 100
                     })
                 });
@@ -315,6 +347,13 @@
                 submitBtn.disabled = false;
             }
         });
+
+        // Initialize
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', loadModels);
+        } else {
+            loadModels();
+        }
     </script>
 </body>
 </html>

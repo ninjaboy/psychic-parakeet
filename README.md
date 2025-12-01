@@ -2,13 +2,16 @@
 
 ML-powered application that detects faces in GIFs and replaces them with your face.
 
+Built with **Node.js**, **TensorFlow.js**, and **face-api.js**.
+
 ## Features
 
-- **ML Face Detection**: Uses dlib's HOG/CNN models via `face_recognition` library
-- **Seamless Face Replacement**: Color-matching and seamless cloning for natural results
+- **ML Face Detection**: Uses face-api.js (TensorFlow.js) for accurate face detection
+- **Seamless Face Replacement**: Color-matching and smooth blending for natural results
 - **FFmpeg Integration**: High-quality GIF frame extraction and reassembly
 - **Web Interface**: Simple drag-and-drop UI
 - **REST API**: Programmatic access for integration
+- **Pure JS Fallback**: Works without FFmpeg using gifuct-js
 
 ## Quick Start
 
@@ -26,22 +29,31 @@ Then open http://localhost:8000
 
 ```bash
 # Ubuntu/Debian
-sudo apt-get install ffmpeg cmake libboost-all-dev libopenblas-dev
+sudo apt-get install ffmpeg build-essential libcairo2-dev libpango1.0-dev \
+  libjpeg-dev libgif-dev librsvg2-dev
 
 # macOS
-brew install ffmpeg cmake boost
+brew install pkg-config cairo pango libpng jpeg giflib librsvg ffmpeg
 ```
 
-2. Install Python dependencies:
+2. Install Node.js dependencies:
 
 ```bash
-pip install -r requirements.txt
+npm install
 ```
 
-3. Run the server:
+3. Download face detection models:
 
 ```bash
-uvicorn app.main:app --reload
+npm run download-models
+```
+
+4. Run the server:
+
+```bash
+npm start
+# or for development with auto-reload:
+npm run dev
 ```
 
 ## API Usage
@@ -56,7 +68,6 @@ Form parameters:
 - `gif_file`: GIF file (or use `gif_url`)
 - `gif_url`: URL to GIF
 - `blend_strength`: Float 0-1 (default: 0.9)
-- `use_advanced`: Boolean - enable color matching (default: true)
 - `use_ffmpeg`: Boolean - use FFmpeg for better quality (default: true)
 
 Example with curl:
@@ -92,8 +103,8 @@ Response:
 {
   "faces_found": 2,
   "face_locations": [
-    {"top": 100, "right": 200, "bottom": 300, "left": 50, "width": 150, "height": 200},
-    {"top": 80, "right": 400, "bottom": 280, "left": 250, "width": 150, "height": 200}
+    {"top": 100, "right": 200, "bottom": 300, "left": 50, "width": 150, "height": 200, "score": 0.95},
+    {"top": 80, "right": 400, "bottom": 280, "left": 250, "width": 150, "height": 200, "score": 0.92}
   ],
   "image_size": {"width": 640, "height": 480}
 }
@@ -102,22 +113,34 @@ Response:
 ## Architecture
 
 ```
-app/
-├── main.py           # FastAPI application
-├── face_detector.py  # ML face detection (dlib/face_recognition)
-├── face_replacer.py  # Face replacement with seamless cloning
-└── gif_processor.py  # FFmpeg-based GIF processing
+src/
+├── index.js          # Express server
+├── faceDetector.js   # ML face detection (face-api.js/TensorFlow.js)
+├── faceReplacer.js   # Face replacement with color matching
+└── gifProcessor.js   # FFmpeg & pure JS GIF processing
 
+models/               # face-api.js pre-trained models
 static/
 └── index.html        # Web interface
 ```
 
 ## How It Works
 
-1. **Extract Frames**: GIF is split into individual frames using FFmpeg
-2. **Detect Faces**: Each frame is analyzed using dlib's face detection model
-3. **Replace Faces**: Source face is resized, color-matched, and seamlessly blended
+1. **Extract Frames**: GIF is split into individual frames using FFmpeg (or pure JS)
+2. **Detect Faces**: Each frame is analyzed using face-api.js neural networks
+3. **Replace Faces**: Source face is resized, color-matched, and smoothly blended
 4. **Reassemble GIF**: Processed frames are combined back into GIF with proper timing
+
+## Tech Stack
+
+- **Node.js 20+** - Runtime
+- **Express** - Web framework
+- **face-api.js** - Face detection (TensorFlow.js)
+- **sharp** - High-performance image processing
+- **fluent-ffmpeg** - FFmpeg wrapper
+- **canvas** - Node.js canvas implementation
+- **gif-encoder-2** - GIF creation
+- **gifuct-js** - GIF parsing
 
 ## Configuration
 
@@ -125,8 +148,8 @@ Environment variables:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `HOST` | Server host | 0.0.0.0 |
 | `PORT` | Server port | 8000 |
+| `NODE_ENV` | Environment | development |
 
 ## License
 

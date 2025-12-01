@@ -1,30 +1,9 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
+# Dependencies
+node_modules/
 
-# Virtual environments
-venv/
-ENV/
-env/
-.venv/
+# Build
+dist/
+build/
 
 # IDE
 .idea/
@@ -37,13 +16,12 @@ env/
 uploads/
 outputs/
 temp/
-*.gif
-*.jpg
-*.jpeg
-*.png
 
 # Logs
 *.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
 # OS
 .DS_Store
@@ -52,3 +30,12 @@ Thumbs.db
 # Environment
 .env
 .env.local
+.env.*.local
+
+# Test
+coverage/
+.nyc_output/
+
+# Cache
+.npm
+.eslintcache

@@ -1,25 +1,70 @@
 /**
- * Face replacement API - Pure JS version for Vercel
+ * Face replacement API using Replicate's face-swap model
+ * Uses InsightFace-based model for quality face swapping
  */
 
 const { parseGIF, decompressFrames } = require('gifuct-js');
 const GIFEncoder = require('gif-encoder-2');
-const Jimp = require('jimp');
 
 module.exports.config = {
   api: {
-    bodyParser: { sizeLimit: '20mb' },
+    bodyParser: { sizeLimit: '10mb' },
   },
-  maxDuration: 60,
+  maxDuration: 300, // 5 minutes for processing multiple frames
 };
 
-function extractGifFrames(gifBuffer) {
-  console.log('DEBUG API: Parsing GIF, buffer length:', gifBuffer.length);
-  const gif = parseGIF(gifBuffer);
-  console.log('DEBUG API: GIF parsed, dimensions:', gif.lsd.width, 'x', gif.lsd.height);
-  const frames = decompressFrames(gif, true);
-  console.log('DEBUG API: Frames decompressed, count:', frames.length);
+// Call Replicate API for face swap
+async function swapFace(targetImageBase64, sourceImageBase64, apiKey) {
+  const response = await fetch('https://api.replicate.com/v1/predictions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Token ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      version: 'cff87316e31787df12002c9e20a78a017b8535625d5a9e6fba98a9eb8c4ca04a',
+      input: {
+        input_image: targetImageBase64,
+        swap_image: sourceImageBase64,
+      },
+    }),
+  });
 
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`Replicate API error: ${response.status} - ${err}`);
+  }
+
+  const prediction = await response.json();
+
+  // Poll for completion
+  let result = prediction;
+  while (result.status !== 'succeeded' && result.status !== 'failed') {
+    await new Promise(r => setTimeout(r, 1000));
+    const pollResponse = await fetch(`https://api.replicate.com/v1/predictions/${result.id}`, {
+      headers: { 'Authorization': `Token ${apiKey}` },
+    });
+    result = await pollResponse.json();
+  }
+
+  if (result.status === 'failed') {
+    throw new Error(`Face swap failed: ${result.error || 'Unknown error'}`);
+  }
+
+  return result.output;
+}
+
+// Convert image URL to base64
+async function urlToBase64(url) {
+  const response = await fetch(url);
+  const buffer = await response.arrayBuffer();
+  return `data:image/png;base64,${Buffer.from(buffer).toString('base64')}`;
+}
+
+// Extract frames from GIF
+function extractGifFrames(gifBuffer) {
+  const gif = parseGIF(gifBuffer);
+  const frames = decompressFrames(gif, true);
   const width = gif.lsd.width;
   const height = gif.lsd.height;
   const processedFrames = [];
@@ -51,45 +96,60 @@ function extractGifFrames(gifBuffer) {
   return { frames: processedFrames, delays, width, height };
 }
 
-async function replaceFaceInFrame(frameData, width, height, faceImageBuffer, faceBox, blendStrength) {
-  const faceImage = await Jimp.read(faceImageBuffer);
-  faceImage.resize(faceBox.width, faceBox.height);
-  const result = new Uint8ClampedArray(frameData);
-  const facePixels = faceImage.bitmap.data;
-  const centerX = faceBox.width / 2;
-  const centerY = faceBox.height / 2;
-  const radiusX = faceBox.width * 0.45;
-  const radiusY = faceBox.height * 0.48;
-
-  for (let y = 0; y < faceBox.height; y++) {
-    for (let x = 0; x < faceBox.width; x++) {
-      const targetX = faceBox.x + x;
-      const targetY = faceBox.y + y;
-      if (targetX < 0 || targetX >= width || targetY < 0 || targetY >= height) continue;
-      const dx = (x - centerX) / radiusX;
-      const dy = (y - centerY) / radiusY;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      let alpha = 0;
-      if (dist < 0.7) alpha = blendStrength;
-      else if (dist < 1.0) alpha = blendStrength * (1 - (dist - 0.7) / 0.3);
-      if (alpha > 0) {
-        const srcIdx = (y * faceBox.width + x) * 4;
-        const dstIdx = (targetY * width + targetX) * 4;
-        result[dstIdx] = Math.round(facePixels[srcIdx] * alpha + result[dstIdx] * (1 - alpha));
-        result[dstIdx + 1] = Math.round(facePixels[srcIdx + 1] * alpha + result[dstIdx + 1] * (1 - alpha));
-        result[dstIdx + 2] = Math.round(facePixels[srcIdx + 2] * alpha + result[dstIdx + 2] * (1 - alpha));
+// Convert RGBA frame to PNG base64
+function frameToPngBase64(frameData, width, height) {
+  // Create PNG manually (simple uncompressed PNG)
+  const Jimp = require('jimp');
+  return new Promise((resolve) => {
+    new Jimp(width, height, (err, image) => {
+      if (err) throw err;
+      for (let i = 0; i < frameData.length; i += 4) {
+        const x = (i / 4) % width;
+        const y = Math.floor((i / 4) / width);
+        const color = Jimp.rgbaToInt(
+          frameData[i],
+          frameData[i + 1],
+          frameData[i + 2],
+          frameData[i + 3]
+        );
+        image.setPixelColor(color, x, y);
       }
-    }
-  }
-  return result;
+      image.getBase64(Jimp.MIME_PNG, (err, base64) => {
+        resolve(base64);
+      });
+    });
+  });
 }
 
+// Convert base64 image to RGBA frame data
+async function base64ToFrameData(base64Url, width, height) {
+  const Jimp = require('jimp');
+  const buffer = Buffer.from(base64Url.replace(/^data:image\/\w+;base64,/, ''), 'base64');
+  const image = await Jimp.read(buffer);
+  image.resize(width, height);
+
+  const frameData = new Uint8ClampedArray(width * height * 4);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const color = image.getPixelColor(x, y);
+      const rgba = Jimp.intToRGBA(color);
+      const idx = (y * width + x) * 4;
+      frameData[idx] = rgba.r;
+      frameData[idx + 1] = rgba.g;
+      frameData[idx + 2] = rgba.b;
+      frameData[idx + 3] = rgba.a;
+    }
+  }
+  return frameData;
+}
+
+// Create GIF from frames
 function createGif(frames, width, height, delays) {
-  console.log('DEBUG API: Creating GIF, frames:', frames.length, 'size:', width, 'x', height);
   const encoder = new GIFEncoder(width, height, 'neuquant', true);
   encoder.start();
   encoder.setRepeat(0);
   encoder.setQuality(10);
+
   for (let i = 0; i < frames.length; i++) {
     encoder.setDelay(delays[i]);
     const rgb = [];
@@ -98,78 +158,78 @@ function createGif(frames, width, height, delays) {
     }
     encoder.addFrame(rgb);
   }
+
   encoder.finish();
-  const result = Buffer.from(encoder.out.getData());
-  console.log('DEBUG API: GIF created, size:', result.length);
-  return result;
+  return Buffer.from(encoder.out.getData());
 }
 
 module.exports = async function handler(req, res) {
-  console.log('DEBUG API: Request received, method:', req.method);
-
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
   try {
-    console.log('DEBUG API: Body type:', typeof req.body);
-    console.log('DEBUG API: Body keys:', Object.keys(req.body || {}));
-
-    const { faceImage, gifData, faces, blendStrength = 0.9 } = req.body;
-
-    console.log('DEBUG API: faceImage length:', faceImage?.length);
-    console.log('DEBUG API: gifData length:', gifData?.length);
-    console.log('DEBUG API: faces:', JSON.stringify(faces));
-    console.log('DEBUG API: blendStrength:', blendStrength);
+    const { faceImage, gifData, apiKey, maxFrames = 10 } = req.body;
 
     if (!faceImage || !gifData) {
+      return res.status(400).json({ error: 'Missing faceImage or gifData' });
+    }
+
+    if (!apiKey) {
       return res.status(400).json({
-        error: 'Missing required fields',
-        debug: { hasFaceImage: !!faceImage, hasGifData: !!gifData }
+        error: 'Missing Replicate API key',
+        info: 'Get your API key at https://replicate.com/account/api-tokens'
       });
     }
 
-    console.log('DEBUG API: Decoding base64...');
-    const faceBuffer = Buffer.from(faceImage.replace(/^data:image\/\w+;base64,/, ''), 'base64');
+    console.log('Extracting GIF frames...');
     const gifBuffer = Buffer.from(gifData.replace(/^data:image\/\w+;base64,/, ''), 'base64');
-    console.log('DEBUG API: Face buffer:', faceBuffer.length, 'GIF buffer:', gifBuffer.length);
-
-    console.log('DEBUG API: Extracting frames...');
     const { frames, delays, width, height } = extractGifFrames(gifBuffer);
-    console.log('DEBUG API: Extracted', frames.length, 'frames');
+
+    // Limit frames to process
+    const framesToProcess = Math.min(frames.length, maxFrames);
+    console.log(`Processing ${framesToProcess} of ${frames.length} frames`);
 
     const processedFrames = [];
 
-    for (let i = 0; i < frames.length; i++) {
-      let frameResult = frames[i];
-      const frameFaces = faces?.[i] || faces?.[0] || null;
-      if (frameFaces) {
-        const faceList = Array.isArray(frameFaces) ? frameFaces : [frameFaces];
-        for (const faceBox of faceList) {
-          if (faceBox && faceBox.width > 0 && faceBox.height > 0) {
-            console.log('DEBUG API: Processing frame', i, 'face:', JSON.stringify(faceBox));
-            frameResult = await replaceFaceInFrame(frameResult, width, height, faceBuffer, faceBox, blendStrength);
-          }
-        }
+    for (let i = 0; i < framesToProcess; i++) {
+      console.log(`Processing frame ${i + 1}/${framesToProcess}...`);
+
+      // Convert frame to base64 PNG
+      const frameBase64 = await frameToPngBase64(frames[i], width, height);
+
+      try {
+        // Call Replicate face swap
+        const swappedUrl = await swapFace(frameBase64, faceImage, apiKey);
+
+        // Convert result back to frame data
+        const swappedBase64 = await urlToBase64(swappedUrl);
+        const swappedFrame = await base64ToFrameData(swappedBase64, width, height);
+        processedFrames.push(swappedFrame);
+      } catch (swapErr) {
+        console.log(`Frame ${i + 1} swap failed, using original:`, swapErr.message);
+        processedFrames.push(frames[i]); // Use original on failure
       }
-      processedFrames.push(frameResult);
     }
 
-    console.log('DEBUG API: Creating output GIF...');
+    // Add remaining frames unchanged if we limited processing
+    for (let i = framesToProcess; i < frames.length; i++) {
+      processedFrames.push(frames[i]);
+    }
+
+    console.log('Creating output GIF...');
     const outputBuffer = createGif(processedFrames, width, height, delays);
     const base64Output = outputBuffer.toString('base64');
-    console.log('DEBUG API: Output base64 length:', base64Output.length);
 
     res.status(200).json({
       success: true,
-      framesProcessed: frames.length,
-      dimensions: { width, height },
+      framesProcessed: framesToProcess,
+      totalFrames: frames.length,
       gif: `data:image/gif;base64,${base64Output}`,
     });
 
   } catch (error) {
-    console.error('DEBUG API: Error:', error.message);
-    console.error('DEBUG API: Stack:', error.stack);
+    console.error('Error:', error);
     res.status(500).json({
       error: error.message,
       stack: error.stack?.split('\n').slice(0, 5)

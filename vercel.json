@@ -2,10 +2,12 @@
   "version": 2,
   "builds": [
     { "src": "index.html", "use": "@vercel/static" },
-    { "src": "api/*.js", "use": "@vercel/node" }
+    { "src": "api/**/*.js", "use": "@vercel/node" }
   ],
   "routes": [
-    { "src": "/api/(.*)", "dest": "/api/$1" },
+    { "src": "/api/replace-faces", "dest": "/api/replace-faces.js" },
+    { "src": "/api/health", "dest": "/api/health.js" },
+    { "src": "/api/detect-faces", "dest": "/api/detect-faces.js" },
     { "src": "/(.*)", "dest": "/index.html" }
   ]
 }

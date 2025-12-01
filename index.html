@@ -4,8 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Face GIF Replacer</title>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/face-detection@1.0.2"></script>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
@@ -55,14 +53,15 @@
             border-radius: 12px; padding: 15px; text-align: center;
         }
         .preview-box h3 { font-size: 0.9rem; color: #888; margin-bottom: 10px; }
-        .preview-box img, .preview-box canvas { max-width: 100%; max-height: 200px; border-radius: 8px; }
+        .preview-box img { max-width: 100%; max-height: 200px; border-radius: 8px; }
         .preview-box .placeholder {
             height: 150px; display: flex; align-items: center; justify-content: center;
             color: #555; border: 2px dashed #333; border-radius: 8px;
         }
-        .options { display: flex; gap: 20px; flex-wrap: wrap; }
+        .options { display: flex; gap: 20px; flex-wrap: wrap; align-items: center; }
         .option { display: flex; align-items: center; gap: 8px; }
         .option input[type="range"] { width: 120px; accent-color: #00d9ff; }
+        .option input[type="number"] { width: 70px; padding: 5px; border-radius: 4px; border: 1px solid #444; background: #222; color: #fff; }
         .option label { color: #aaa; font-size: 0.9rem; }
         .option .value { color: #00d9ff; font-weight: bold; min-width: 40px; }
         .submit-btn {
@@ -89,15 +88,13 @@
         }
         @keyframes spin { to { transform: rotate(360deg); } }
         .hidden { display: none; }
-        .model-status { font-size: 0.8rem; color: #666; margin-top: 5px; }
-        .model-status.loaded { color: #00ff88; }
+        .info { font-size: 0.85rem; color: #666; margin-top: 10px; }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>Face GIF Replacer</h1>
-        <p class="subtitle">Replace faces in GIFs with your own face using ML</p>
-        <p class="model-status" id="modelStatus">Loading face detection model...</p>
+        <p class="subtitle">Overlay your face on GIFs</p>
 
         <form id="uploadForm">
             <div class="card">
@@ -106,7 +103,7 @@
                     <span id="faceFileName">Choose face image</span>
                     <input type="file" id="faceFile" accept="image/*">
                 </label>
-                <p id="faceDetectionStatus" style="margin-top:10px;color:#888;font-size:0.9rem;"></p>
+                <p class="info">Upload a photo with your face (will be cropped to face region)</p>
             </div>
 
             <div class="card">
@@ -129,19 +126,32 @@
             </div>
 
             <div class="card">
-                <h2><span class="step">3</span> Options</h2>
+                <h2><span class="step">3</span> Position & Options</h2>
                 <div class="options">
+                    <div class="option">
+                        <label>X:</label>
+                        <input type="number" id="faceX" value="50">
+                    </div>
+                    <div class="option">
+                        <label>Y:</label>
+                        <input type="number" id="faceY" value="50">
+                    </div>
+                    <div class="option">
+                        <label>Size:</label>
+                        <input type="number" id="faceSize" value="100">
+                    </div>
                     <div class="option">
                         <input type="range" id="blendStrength" min="0" max="100" value="90">
                         <label>Blend:</label>
                         <span class="value" id="blendValue">90%</span>
                     </div>
                 </div>
+                <p class="info">Adjust X, Y position and Size of the face overlay on the GIF</p>
             </div>
 
             <div class="card">
-                <button type="submit" class="submit-btn" id="submitBtn" disabled>
-                    Loading ML Model...
+                <button type="submit" class="submit-btn" id="submitBtn">
+                    Replace Faces
                 </button>
             </div>
         </form>
@@ -161,42 +171,9 @@
     </div>
 
     <script>
-        let detector = null;
-        let sourceFaceBox = null;
         let faceImageData = null;
         let gifImageData = null;
 
-        // Initialize face detector
-        async function initDetector() {
-            try {
-                const model = faceDetection.SupportedModels.MediaPipeFaceDetector;
-                detector = await faceDetection.createDetector(model, {
-                    runtime: 'tfjs',
-                    maxFaces: 10
-                });
-                document.getElementById('modelStatus').textContent = 'Face detection ready';
-                document.getElementById('modelStatus').classList.add('loaded');
-                document.getElementById('submitBtn').disabled = false;
-                document.getElementById('submitBtn').textContent = 'Replace Faces';
-            } catch (e) {
-                document.getElementById('modelStatus').textContent = 'Model load failed: ' + e.message;
-            }
-        }
-        initDetector();
-
-        // Detect faces in image
-        async function detectFaces(imgElement) {
-            if (!detector) return [];
-            const faces = await detector.estimateFaces(imgElement);
-            return faces.map(f => ({
-                x: Math.round(f.box.xMin),
-                y: Math.round(f.box.yMin),
-                width: Math.round(f.box.width),
-                height: Math.round(f.box.height)
-            }));
-        }
-
-        // File to base64
         function fileToBase64(file) {
             return new Promise((resolve, reject) => {
                 const reader = new FileReader();
@@ -206,61 +183,28 @@
             });
         }
 
-        // Load image element
-        function loadImage(src) {
-            return new Promise((resolve, reject) => {
-                const img = new Image();
-                img.onload = () => resolve(img);
-                img.onerror = reject;
-                img.src = src;
-            });
-        }
-
-        // Face file handler
         document.getElementById('faceFile').addEventListener('change', async (e) => {
             const file = e.target.files[0];
             if (!file) return;
-
             document.getElementById('faceFileName').textContent = file.name;
             document.getElementById('faceFileLabel').classList.add('has-file');
-
             faceImageData = await fileToBase64(file);
             document.getElementById('facePreview').innerHTML = `<img src="${faceImageData}" alt="Face">`;
-
-            // Detect face
-            document.getElementById('faceDetectionStatus').textContent = 'Detecting face...';
-            const img = await loadImage(faceImageData);
-            const faces = await detectFaces(img);
-
-            if (faces.length > 0) {
-                sourceFaceBox = faces[0];
-                document.getElementById('faceDetectionStatus').textContent = `Face detected! (${faces.length} found)`;
-                document.getElementById('faceDetectionStatus').style.color = '#00ff88';
-            } else {
-                sourceFaceBox = { x: 0, y: 0, width: img.width, height: img.height };
-                document.getElementById('faceDetectionStatus').textContent = 'No face detected, using full image';
-                document.getElementById('faceDetectionStatus').style.color = '#ffaa00';
-            }
         });
 
-        // GIF file handler
         document.getElementById('gifFile').addEventListener('change', async (e) => {
             const file = e.target.files[0];
             if (!file) return;
-
             document.getElementById('gifFileName').textContent = file.name;
             document.getElementById('gifFileLabel').classList.add('has-file');
-
             gifImageData = await fileToBase64(file);
             document.getElementById('gifPreview').innerHTML = `<img src="${gifImageData}" alt="GIF">`;
         });
 
-        // Blend slider
         document.getElementById('blendStrength').addEventListener('input', (e) => {
             document.getElementById('blendValue').textContent = e.target.value + '%';
         });
 
-        // Form submit
         document.getElementById('uploadForm').addEventListener('submit', async (e) => {
             e.preventDefault();
 
@@ -277,14 +221,16 @@
             statusCard.classList.remove('hidden');
             resultCard.classList.add('hidden');
             submitBtn.disabled = true;
+            statusText.innerHTML = '<span class="spinner"></span> Processing GIF...';
+            statusText.classList.remove('error');
 
             try {
-                // Detect faces in first frame of GIF
-                statusText.innerHTML = '<span class="spinner"></span> Detecting faces in GIF...';
-                const gifImg = await loadImage(gifImageData);
-                const gifFaces = await detectFaces(gifImg);
-
-                statusText.innerHTML = '<span class="spinner"></span> Processing GIF (this may take a while)...';
+                const faceBox = {
+                    x: parseInt(document.getElementById('faceX').value) || 50,
+                    y: parseInt(document.getElementById('faceY').value) || 50,
+                    width: parseInt(document.getElementById('faceSize').value) || 100,
+                    height: parseInt(document.getElementById('faceSize').value) || 100
+                };
 
                 const response = await fetch('/api/replace-faces', {
                     method: 'POST',
@@ -292,7 +238,7 @@
                     body: JSON.stringify({
                         faceImage: faceImageData,
                         gifData: gifImageData,
-                        faces: gifFaces.length > 0 ? gifFaces : [sourceFaceBox],
+                        faces: [faceBox],
                         blendStrength: document.getElementById('blendStrength').value / 100
                     })
                 });

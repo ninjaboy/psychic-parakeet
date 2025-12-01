@@ -14,8 +14,12 @@ module.exports.config = {
 };
 
 function extractGifFrames(gifBuffer) {
+  console.log('DEBUG API: Parsing GIF, buffer length:', gifBuffer.length);
   const gif = parseGIF(gifBuffer);
+  console.log('DEBUG API: GIF parsed, dimensions:', gif.lsd.width, 'x', gif.lsd.height);
   const frames = decompressFrames(gif, true);
+  console.log('DEBUG API: Frames decompressed, count:', frames.length);
+
   const width = gif.lsd.width;
   const height = gif.lsd.height;
   const processedFrames = [];
@@ -81,6 +85,7 @@ async function replaceFaceInFrame(frameData, width, height, faceImageBuffer, fac
 }
 
 function createGif(frames, width, height, delays) {
+  console.log('DEBUG API: Creating GIF, frames:', frames.length, 'size:', width, 'x', height);
   const encoder = new GIFEncoder(width, height, 'neuquant', true);
   encoder.start();
   encoder.setRepeat(0);
@@ -94,28 +99,45 @@ function createGif(frames, width, height, delays) {
     encoder.addFrame(rgb);
   }
   encoder.finish();
-  return Buffer.from(encoder.out.getData());
+  const result = Buffer.from(encoder.out.getData());
+  console.log('DEBUG API: GIF created, size:', result.length);
+  return result;
 }
 
 module.exports = async function handler(req, res) {
+  console.log('DEBUG API: Request received, method:', req.method);
+
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
   try {
+    console.log('DEBUG API: Body type:', typeof req.body);
+    console.log('DEBUG API: Body keys:', Object.keys(req.body || {}));
+
     const { faceImage, gifData, faces, blendStrength = 0.9 } = req.body;
+
+    console.log('DEBUG API: faceImage length:', faceImage?.length);
+    console.log('DEBUG API: gifData length:', gifData?.length);
+    console.log('DEBUG API: faces:', JSON.stringify(faces));
+    console.log('DEBUG API: blendStrength:', blendStrength);
 
     if (!faceImage || !gifData) {
       return res.status(400).json({
         error: 'Missing required fields',
-        usage: { faceImage: 'base64', gifData: 'base64', faces: '[{x,y,width,height}]' }
+        debug: { hasFaceImage: !!faceImage, hasGifData: !!gifData }
       });
     }
 
+    console.log('DEBUG API: Decoding base64...');
     const faceBuffer = Buffer.from(faceImage.replace(/^data:image\/\w+;base64,/, ''), 'base64');
     const gifBuffer = Buffer.from(gifData.replace(/^data:image\/\w+;base64,/, ''), 'base64');
+    console.log('DEBUG API: Face buffer:', faceBuffer.length, 'GIF buffer:', gifBuffer.length);
 
+    console.log('DEBUG API: Extracting frames...');
     const { frames, delays, width, height } = extractGifFrames(gifBuffer);
+    console.log('DEBUG API: Extracted', frames.length, 'frames');
+
     const processedFrames = [];
 
     for (let i = 0; i < frames.length; i++) {
@@ -125,6 +147,7 @@ module.exports = async function handler(req, res) {
         const faceList = Array.isArray(frameFaces) ? frameFaces : [frameFaces];
         for (const faceBox of faceList) {
           if (faceBox && faceBox.width > 0 && faceBox.height > 0) {
+            console.log('DEBUG API: Processing frame', i, 'face:', JSON.stringify(faceBox));
             frameResult = await replaceFaceInFrame(frameResult, width, height, faceBuffer, faceBox, blendStrength);
           }
         }
@@ -132,16 +155,24 @@ module.exports = async function handler(req, res) {
       processedFrames.push(frameResult);
     }
 
+    console.log('DEBUG API: Creating output GIF...');
     const outputBuffer = createGif(processedFrames, width, height, delays);
+    const base64Output = outputBuffer.toString('base64');
+    console.log('DEBUG API: Output base64 length:', base64Output.length);
 
     res.status(200).json({
       success: true,
       framesProcessed: frames.length,
-      gif: `data:image/gif;base64,${outputBuffer.toString('base64')}`,
+      dimensions: { width, height },
+      gif: `data:image/gif;base64,${base64Output}`,
     });
 
   } catch (error) {
-    console.error('Processing error:', error);
-    res.status(500).json({ error: error.message });
+    console.error('DEBUG API: Error:', error.message);
+    console.error('DEBUG API: Stack:', error.stack);
+    res.status(500).json({
+      error: error.message,
+      stack: error.stack?.split('\n').slice(0, 5)
+    });
   }
 };

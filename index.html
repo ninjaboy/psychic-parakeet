@@ -91,6 +91,11 @@
         }
         .status { text-align: center; padding: 20px; color: #00d9ff; font-size: 1.1rem; }
         .status.error { color: #ff4444; }
+        .debug-log {
+            background: #000; color: #0f0; font-family: monospace; font-size: 11px;
+            padding: 10px; border-radius: 8px; max-height: 300px; overflow-y: auto;
+            white-space: pre-wrap; word-break: break-all; text-align: left;
+        }
         .spinner {
             display: inline-block; width: 20px; height: 20px;
             border: 3px solid rgba(255,255,255,0.3); border-radius: 50%;
@@ -156,6 +161,7 @@
 
         <div class="card hidden" id="statusCard">
             <div class="status" id="statusText"><span class="spinner"></span>Processing...</div>
+            <div class="debug-log" id="debugLog"></div>
         </div>
 
         <div class="card hidden" id="resultCard">
@@ -174,6 +180,13 @@
         let gifImageData = null;
         let detectedSourceFace = null;
         let detectedGifFaces = [];
+
+        function log(msg) {
+            const el = document.getElementById('debugLog');
+            const time = new Date().toLocaleTimeString();
+            el.textContent += `[${time}] ${msg}\n`;
+            el.scrollTop = el.scrollHeight;
+        }
 
         // Load face-api.js models
         async function loadModels() {
@@ -310,6 +323,8 @@
             statusText.innerHTML = '<span class="spinner"></span> Processing GIF...';
             statusText.classList.remove('error');
 
+            document.getElementById('debugLog').textContent = '';
+
             try {
                 // Use detected faces or fallback to center
                 let facesToUse = detectedGifFaces;
@@ -317,10 +332,10 @@
                     facesToUse = [{ x: 50, y: 50, width: 100, height: 100 }];
                 }
 
-                console.log('DEBUG: Starting request...');
-                console.log('DEBUG: Face data length:', faceImageData?.length);
-                console.log('DEBUG: GIF data length:', gifImageData?.length);
-                console.log('DEBUG: Faces to use:', JSON.stringify(facesToUse));
+                log('Starting request...');
+                log('Face data length: ' + (faceImageData?.length || 0));
+                log('GIF data length: ' + (gifImageData?.length || 0));
+                log('Faces: ' + JSON.stringify(facesToUse));
 
                 statusText.innerHTML = '<span class="spinner"></span> Sending to API...';
 
@@ -331,35 +346,49 @@
                     blendStrength: document.getElementById('blendStrength').value / 100
                 };
 
-                console.log('DEBUG: Payload size:', JSON.stringify(payload).length);
+                const payloadStr = JSON.stringify(payload);
+                log('Payload size: ' + payloadStr.length + ' bytes');
 
-                const response = await fetch('/api/replace-faces', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
+                log('Fetching /api/replace-faces...');
+                let response;
+                try {
+                    response = await fetch('/api/replace-faces', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: payloadStr
+                    });
+                    log('Fetch completed, status: ' + response.status);
+                } catch (fetchErr) {
+                    log('FETCH ERROR: ' + fetchErr.name + ': ' + fetchErr.message);
+                    throw fetchErr;
+                }
 
-                console.log('DEBUG: Response status:', response.status);
-                console.log('DEBUG: Response headers:', [...response.headers.entries()]);
+                log('Response status: ' + response.status);
+                log('Response type: ' + response.type);
+                log('Response URL: ' + response.url);
 
                 statusText.innerHTML = '<span class="spinner"></span> Parsing response...';
 
                 const responseText = await response.text();
-                console.log('DEBUG: Response text length:', responseText.length);
-                console.log('DEBUG: Response preview:', responseText.substring(0, 500));
+                log('Response length: ' + responseText.length);
+                log('Response preview: ' + responseText.substring(0, 300));
 
                 let result;
                 try {
                     result = JSON.parse(responseText);
+                    log('JSON parsed OK');
                 } catch (parseErr) {
-                    throw new Error('Failed to parse response: ' + parseErr.message + ' | Response: ' + responseText.substring(0, 200));
+                    log('JSON PARSE ERROR: ' + parseErr.message);
+                    throw new Error('Parse failed: ' + responseText.substring(0, 200));
                 }
 
                 if (!response.ok) {
+                    log('API ERROR: ' + (result.error || 'Unknown'));
+                    if (result.stack) log('Stack: ' + result.stack.join('\n'));
                     throw new Error(result.error || 'Processing failed');
                 }
 
-                console.log('DEBUG: Success! GIF length:', result.gif?.length);
+                log('Success! Output GIF length: ' + (result.gif?.length || 0));
 
                 document.getElementById('resultImage').src = result.gif;
                 document.getElementById('downloadBtn').href = result.gif;
@@ -367,8 +396,9 @@
                 resultCard.classList.remove('hidden');
 
             } catch (error) {
-                console.error('DEBUG: Full error:', error);
-                statusText.innerHTML = `Error: ${error.message}<br><small>Check browser console (F12) for details</small>`;
+                log('ERROR: ' + error.name + ': ' + error.message);
+                if (error.stack) log('Stack: ' + error.stack);
+                statusText.innerHTML = `Error: ${error.message}`;
                 statusText.classList.add('error');
             } finally {
                 submitBtn.disabled = false;

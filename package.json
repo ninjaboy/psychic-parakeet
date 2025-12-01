@@ -2,11 +2,7 @@
   "name": "face-gif-replacer",
   "version": "1.0.0",
   "description": "ML-powered face replacement in GIFs",
-  "type": "module",
-  "scripts": {
-    "start": "node src/index.js",
-    "dev": "node --watch src/index.js"
-  },
+  "private": true,
   "engines": {
     "node": "20.x"
   },
